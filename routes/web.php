@@ -60,6 +60,8 @@ Route::get('/admin', function (){
     return redirect('admin/dashboard');
 });
 
+Route::get('pathao/booking', 'PathaoController@booking')->name('pathao.booking');
+
 Auth::routes(['except' => 'register']);
 
 Route::group(['as' => 'admin.', 'prefix' => 'admin', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {

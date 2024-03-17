@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\City;
+use App\Order;
+use App\Pathao\Facade\Pathao;
 use App\Zone;
 use Illuminate\Http\Request;
 
@@ -182,6 +184,78 @@ class PathaoController extends Controller
 
     }
     
-    
+    public function booking()
+    {
+        $orders =  Order::with('user', 'courier', 'city', 'zone', 'products', 'notification')
+            ->join('customers', 'customers.order_id', '=', 'orders.id')
+            ->select('orders.*', 'customers.customerPhone', 'customers.customerName', 'customers.customerAddress');
+        $orders = $orders->whereIn('orders.status', ['Invoiced'])
+            ->where(function ($query) {
+                $query->where('orders.memo', '=', 0)
+                    ->orWhere('orders.memo', '=', null);
+            })
 
+
+            ->orderBy('orders.id', 'DESC')
+            ->get();
+
+        foreach ($orders as $order) {
+            if ($order->courier_id == 1 && !empty($order->city->cityName) && !empty($order->zone->belongsToID)) {
+                $response = json_encode(['status' => 'success', 'message' => $order->invoiceID . ': Successfully booked']);
+                if ($order->memo) {
+                    $details = \App\Pathao\Facade\Pathao::order()->orderDetails($order->memo);
+                    if ($details->order_status != 'Pickup Cancel') continue;
+                }
+
+                $data = [
+                    "store_id"            => "4745", // Find in store list,
+                    "merchant_order_id"   => $order->invoiceID, // Unique order id
+                    "recipient_name"      => $order->customerName, // Customer name
+                    "recipient_phone"     => \Illuminate\Support\Str::after($order->customerPhone, '+88'), // Customer phone
+                    "recipient_address"   => str_replace(array("\n", "\r"), '', $order->customerAddress), // Customer address
+                    "recipient_city"      => $order->city_id - 1000, // Find in city method
+                    "recipient_zone"      => $order->zone->belongsToID, // Find in zone method
+                    // "recipient_area"      => "", // Find in Area method
+                    "delivery_type"       => 48, // 48 for normal delivery or 12 for on demand delivery
+                    "item_type"           => 2, // 1 for document, 2 for parcel
+                    // "special_instruction" => "",
+                    "item_quantity"       => 1, // item quantity
+                    "item_weight"         => 0.5, // parcel weight
+                    "amount_to_collect"   => $order->subTotal, // - $order->deliveryCharge, // amount to collect
+                    "item_description"    => $this->getProductsDetails($order->id), // product details
+                ];
+                // dd(collect(\App\Pathao\Facade\Pathao::area()->city()->data)->filter(fn ($item) => $item->city_id == 23));
+                // dd($data);
+
+                try {
+                    $data = \App\Pathao\Facade\Pathao::order()->create($data);
+
+                    // $courier = collect(json_decode(json_encode($data), true))->only([
+                    //     'consignment_id',
+                    //     'order_status',
+                    //     'reason',
+                    //     'invoice_id',
+                    //     'payment_status',
+                    //     'collected_amount',
+                    // ])->all();
+                    $order->memo = $data->consignment_id;
+                    $order->save();
+                    // $order->forceFill(['courier' => ['booking' => 'Pathao'] + $courier])->save();
+                } catch (\Exception $e) {
+                    $city = collect(Pathao::area()->city()->data)->filter(function ($city) use (&$data) {
+                        return $city->city_id == $data['recipient_city'];
+                    })->first();
+                    $zone = collect(Pathao::area()->zone($data['recipient_city'])->data)->filter(function ($zone) use (&$data) {
+                        return $zone->zone_id == $data['recipient_zone'];
+                    })->first();
+                    $errors = collect($e->errors ?? null)->values()->flatten()->toArray();
+                    $response = json_encode(['status' => 'failed', 'message' => $order->invoiceID . ': ' . ($errors[0] ?? $e->getMessage())]);
+                    dump($city, $zone, $data, $errors, $response);
+                    info($order->invoiceID . ': ' . ($errors[0] ?? $e->getMessage()));
+                }
+
+                echo $response;
+            }
+        }
+    }
 }
